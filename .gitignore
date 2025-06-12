@@ -1,0 +1,8 @@
+DNA_bert_6/
+gencode.v48.annotation.gtf
+GRCh38.primary_assembly.genome.fa
+coding_only.gtf
+best_dnabert_cnn2.pth
+best_dnabert_splice.pth
+best_dnabert_cnn.pth
+output.log
