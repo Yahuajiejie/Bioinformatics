@@ -235,24 +235,71 @@ class ResidualCNN(nn.Module):
         return self.fc2(x)
 
 class DNABERTplusCNN(nn.Module):
-    def __init__(self, pretrained_model,flank=50, freeze_bert=True, num_classes=3):
+    def __init__(self, pretrained_model, flank=50, freeze_bert=True, num_classes=3, use_cls=False):
         super(DNABERTplusCNN, self).__init__()
         self.bert = pretrained_model
         self.freeze_bert = freeze_bert
         self.num_classes = num_classes
         self.flank = flank
+        self.use_cls = use_cls
+
         if freeze_bert:
             for param in self.bert.parameters():
                 param.requires_grad = False
 
-        hidden_size = self.bert.config.hidden_size
-        self.cnn = ResidualCNN(input_channels=hidden_size, seq_len=2*self.flank+1, num_classes=num_classes)
+        self.hidden_size = self.bert.config.hidden_size
+        self.seq_len = 2 * flank + 1  # 不含CLS token
+
+        # CNN 分支处理非CLS的token表示 (不包括第0个CLS)
+        self.cnn = ResidualCNN(input_channels=self.hidden_size,
+                               seq_len=self.seq_len,
+                               num_classes=256)
+
+        # 中心 token（CLS 或中间位点）FC
+        #self.cls_fc = nn.Sequential(
+        #    nn.Linear(self.hidden_size, 256),
+        #    nn.ReLU(),
+        #    nn.Dropout(0.5)
+        #)
+
+        # center 4-mer 的表示（用原始 embedding 模拟）
+        self.kmer_fc = nn.Sequential(
+            nn.Linear(self.hidden_size * 4, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5)
+        )
+
+        # 最终融合
+        self.final_fc = nn.Linear(256 + 256, num_classes)
 
     def forward(self, input_ids, attention_mask):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        pooled_output = outputs.last_hidden_state[:,1,:].permute(0, 2, 1)  # (B, H, L) -> (B, L, H)
-        logits = self.cnn(pooled_output)
+        hidden = outputs.last_hidden_state  # (B, L+1, H)
+
+        # 获取中心向量
+        cls_or_mid = hidden[:, 0, :] if self.use_cls else hidden[:, self.flank + 1, :]
+        cls_out = self.cls_fc(cls_or_mid)  # (B, 256)
+
+        # 获取除CLS外 token 表示 (B, L, H) → 不含CLS
+        token_vecs = hidden[:, 1:self.seq_len + 1, :]  # (B, L=seq_len, H)
+        token_vecs = token_vecs.permute(0, 2, 1)       # (B, H, L)
+        cnn_out = self.cnn(token_vecs)                # (B, 256)
+
+        # 提取中心点3-mer（前2后1）
+        # 中心点在 [flank]（因为已去掉CLS，token_vecs的索引从0开始）
+        up1 = hidden[:, self.flank - 2 + 1, :]  # +1 for CLS offset
+        up2 = hidden[:, self.flank - 1 + 1, :]
+        center = hidden[:, self.flank + 0 + 1, :]  # 中心 token
+        down1 = hidden[:, self.flank + 1 + 1, :]
+        center_kmer = torch.cat([up1, up2, center,down1], dim=1)  # (B, H*3)
+        kmer_out = self.kmer_fc(center_kmer)              # (B, 128)
+
+        # 融合
+        fusion = torch.cat([cnn_out,kmer_out], dim=1)  # (B, 640)
+        logits = self.final_fc(fusion)
         return logits
+    
+
 class DNABERTSplice(nn.Module):
     def __init__(self,
                  pretrained_model,
@@ -612,8 +659,8 @@ def main_for_CNN(load_data=True, save_data=True,
                 region_length=1000, flank=flank, device=device,
                 sample_time=sample_times)
 
-            #train_valid_dataset.add_false_positives(FP2)
-            #train_valid_dataset.add_false_negatives(FN2)
+            train_valid_dataset.add_false_positives(FP2)
+            train_valid_dataset.add_false_negatives(FN2)
 
             accuracy = (TP + TN) / (TP + TN + FPn + FNn)
             precision = TP / (TP + FPn) if (TP + FPn) > 0 else 0
@@ -636,7 +683,7 @@ def main_for_CNN(load_data=True, save_data=True,
             
 
 if __name__ == "__main__":
-    main_for_CNN(True,True,train_num_samples=5000,validation_sample_num=100,flank=100,sample_times=5,epochs=100,redirect=True,epoch_range=0)
+    main_for_CNN(True,True,train_num_samples=5000,validation_sample_num=100,flank=75,sample_times=5,epochs=100,redirect=True,epoch_range=0)
 
 
 """

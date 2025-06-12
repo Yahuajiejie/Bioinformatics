@@ -70,8 +70,6 @@ def __extract_splice_sites__(gtf_path, fasta_path, flank=50, neg_pos_per_transcr
                 samples.append({
                     'seq': str(donor_seq),
                     'label': 'donor',
-                    'pos': flank,  # 表示剪切点在序列中间
-                    'strand': strand
                 })
                 splice_coords_set.add((chrom, donor_pos, strand))
 
@@ -84,8 +82,6 @@ def __extract_splice_sites__(gtf_path, fasta_path, flank=50, neg_pos_per_transcr
                 samples.append({
                     'seq': str(acceptor_seq),
                     'label': 'acceptor',
-                    'pos': flank,
-                    'strand': strand
                 })
                 splice_coords_set.add((chrom, acceptor_pos, strand))
 
